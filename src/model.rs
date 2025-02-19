@@ -53,14 +53,17 @@ impl Llama<f32> {
         KVCache::new(self.n_layers, self.max_seq_len, self.n_kv_h * self.dqkv, 0)
     }
 
+    // 前向传播
     pub fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<f32>) -> Tensor<f32> {
+        // 1. 获取输入序列的长度，以及缓存中已有的序列长度
         let seq_len = input.size();
         let past_seq_len = cache.len();
+        // 2. 更新缓存中的序列长度
         cache.increment(seq_len);
         let total_seq_len = past_seq_len + seq_len;
         let n_groups = self.n_q_h / self.n_kv_h;
 
-        // Some pre-allocated buffers that will be reused
+        // Some pre-allocated buffers that will be reused 预分配一些缓冲区，用于存储中间结果
         let mut residual = Tensor::<f32>::default(&vec![seq_len, self.d]);
         let mut hidden_states = Tensor::<f32>::default(&vec![seq_len, self.d]);
         let mut q_buf = Tensor::<f32>::default(&vec![seq_len, self.n_q_h * self.dqkv]);
@@ -70,9 +73,9 @@ impl Llama<f32> {
         let mut up_buf = Tensor::<f32>::default(&vec![seq_len, self.di]);
 
         // Computation Starts Here
-        // Embedding lookup
+        // Embedding lookup 执行嵌入查找，将输入序列转换为嵌入向量
         OP::gather(&mut residual, input, &self.params.embedding_table);
-
+        // 对每一层执行RMS normalization归一化
         for layer in 0..self.n_layers {
             OP::rms_norm(
                 &mut hidden_states,
@@ -80,7 +83,7 @@ impl Llama<f32> {
                 &self.params.rms_att_w[layer],
                 self.eps,
             );
-
+            // 计算自注意力
             let q = (&mut q_buf).reshape(&vec![seq_len, self.n_q_h * self.dqkv]); // (seq, n_h * dqkv)
             let k = &mut cache.k_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
             let v = &mut cache.v_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
@@ -157,17 +160,42 @@ fn self_attention(
 }
 
 fn mlp(
-    residual: &mut Tensor<f32>,
-    hidden_states: &mut Tensor<f32>,
-    gate: &mut Tensor<f32>,
-    up: &mut Tensor<f32>,
-    w_up: &Tensor<f32>,
-    w_down: &Tensor<f32>,
-    w_gate: &Tensor<f32>,
-    rms_w: &Tensor<f32>,
-    eps: f32,
+    residual: &mut Tensor<f32>,     // 残差张量
+    hidden_states: &mut Tensor<f32>,// 隐藏状态张量
+    gate: &mut Tensor<f32>,         // 门控张量
+    up: &mut Tensor<f32>,       // 上投影张量
+    w_up: &Tensor<f32>,         // 上投影权重
+    w_down: &Tensor<f32>,    // 下投影权重
+    w_gate: &Tensor<f32>,    // 门控权重
+    rms_w: &Tensor<f32>,     // RMS归一化权重
+    eps: f32,                // RMS归一化的epsilon值
 ) {
-    todo!("Implement mlp");
+    // todo!("Implement mlp");
+    // 1. 计算残差张量的RMS归一化
+    OP::rms_norm(hidden_states, residual, rms_w, eps);
+    // 2. 计算门控张量和上投影张量
+    OP::matmul_transb(gate, 0., hidden_states, w_gate, 1.0);
+    OP::matmul_transb(up, 0., hidden_states, w_up, 1.0);
+    // 3. SwiGLU激活
+    for i in 0..gate.size() {
+        unsafe {
+            gate.data_mut()[i] = gate.data()[i] * (1. / (1. + (-gate.data()[i]).exp()));
+        }
+    }
+    for i in 0..up.size() {
+        unsafe {
+            up.data_mut()[i] *= up.data()[i];
+        }
+    }
+    // 4. 计算输出
+    let mut output = Tensor::<f32>::default(&residual.shape());
+    OP::matmul_transb(&mut output, 0., up, w_down, 1.0);
+    // 5. 更新residual
+    for i in 0..residual.size() {
+        unsafe {
+            residual.data_mut()[i] += output.data()[i];
+        }
+    }
 }
 
 #[test]

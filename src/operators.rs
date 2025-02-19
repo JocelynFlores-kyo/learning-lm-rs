@@ -1,28 +1,29 @@
 use crate::tensor::Tensor;
 
-// get (row) vectors from a 2D table given a list of indices
+// get (row) vectors from a 2D table given a list of indices 从一个二维表中根据索引列表获取行向量
 pub fn gather(y: &mut Tensor<f32>, indices: &Tensor<u32>, table: &Tensor<f32>) {
-    let length = indices.size();
-    let table_shape = table.shape();
-    assert!(table_shape.len() == 2);
-    let dim = table_shape[1];
-    assert!(y.size() == length * dim);
-    for i in 0..length {
-        let src = &table.data()[indices.data()[i] as usize * dim..][..dim];
-        let dst = &mut unsafe { y.data_mut() }[i * dim..][..dim];
+    // y为输出张量，indices为索引列表，table为二维表
+    let length = indices.size();    // 索引列表的长度
+    let table_shape = table.shape();    // 二维表的形状
+    assert!(table_shape.len() == 2);                 // 确保是二维的
+    let dim = table_shape[1];                 // 二维表的列数
+    assert!(y.size() == length * dim);               // 确保输出张量的大小是索引列表长度乘以二维表的列数
+    for i in 0..length {                      // 遍历索引列表，获取对应的行向量
+        let src = &table.data()[indices.data()[i] as usize * dim..][..dim]; // 获取二维表中的一行
+        let dst = &mut unsafe { y.data_mut() }[i * dim..][..dim];       // 获取输出张量中的一行
         dst.copy_from_slice(src);
     }
 }
 
-// RoPE: Rotary Positional Embedding
+// RoPE: Rotary Positional Embedding 实现旋转位置编码
 pub fn rope(y: &mut Tensor<f32>, start_pos: usize, theta: f32) {
-    let shape = y.shape();
-    assert!(shape.len() == 3);
-    let seq_len = shape[0];
-    let n_heads = shape[1];
-    let d = shape[2];
+    let shape = y.shape();  // 获取张量的形状
+    assert!(shape.len() == 3);  // 确保是三维的
+    let seq_len = shape[0];    // 序列长度
+    let n_heads = shape[1];   // 头数
+    let d = shape[2];       // 维度
     let data = unsafe { y.data_mut() };
-    for tok in 0..seq_len {
+    for tok in 0..seq_len { 
         let pos = start_pos + tok;
         for head in 0..n_heads {
             for i in 0..d / 2 {
@@ -38,14 +39,15 @@ pub fn rope(y: &mut Tensor<f32>, start_pos: usize, theta: f32) {
 }
 
 // softmax(x) = exp(x - max) / sum(exp(x - max))
-// y = softmax(mask(x))
+// y = softmax(mask(x)) 实现带掩码的 softmax
 pub fn masked_softmax(y: &mut Tensor<f32>) {
-    let ndim = y.shape().len();
+    let ndim = y.shape().len(); // 获取张量的维度
     assert!(ndim >= 2);
-    let seq_len = y.shape()[ndim - 2];
+    let seq_len = y.shape()[ndim - 2];  // 序列长度
     let total_seq_len = y.shape()[ndim - 1];
-    let batch = y.size() / (seq_len * total_seq_len);
+    let batch = y.size() / (seq_len * total_seq_len);   // 批次大小
     let data = unsafe { y.data_mut() };
+    // 对每个批次的每个序列进行 softmax
     for b in 0..batch {
         let base = b * seq_len * total_seq_len;
         for i in 0..seq_len {
@@ -71,25 +73,67 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
 }
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
-    todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    let len = y.size();
+    assert!(len == x.size());
+    assert!(len == w.size());
+    let _y = unsafe { y.data_mut() };
+    let _x = x.data();
+    let _w = w.data();
+    let mut sum = 0.0;
+    for i in 0..len {
+        sum += _x[i] * _x[i];
+    }
+    let rms = ((sum / len as f32) + epsilon).sqrt();
+    for i in 0..len {
+        _y[i] = _w[i] * _x[i] / rms;
+    }
+    // todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
 }
 
 // y = silu(x) * y
 // hint: this is an element-wise operation
 pub fn swiglu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
-    // let len = y.size();
-    // assert!(len == x.size());
+    let len = y.size();
+    assert!(len == x.size());
 
-    // let _y = unsafe { y.data_mut() };
-    // let _x = x.data();
+    let _y = unsafe { y.data_mut() };
+    let _x = x.data();
 
-    todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
+    for i in 0..len {
+        _y[i] *= _x[i] / (1. + (-_x[i]).exp());
+    }
+
+    // todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
 }
 
 // C = beta * C + alpha * A @ B^T
 // hint: You don't need to do an explicit transpose of B
 pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    let c_shape = c.shape();
+    let a_shape = a.shape();
+    let b_shape = b.shape();
+    assert!(c_shape.len() == 2);
+    assert!(a_shape.len() == 2);
+    assert!(b_shape.len() == 2);
+    assert!(c_shape[0] == a_shape[0]);
+    assert!(c_shape[1] == b_shape[0]);
+    assert!(a_shape[1] == b_shape[1]);
+    let m = c_shape[0];
+    let n = c_shape[1];
+    let k = a_shape[1];
+    let _c = unsafe { c.data_mut() };
+    let _a = a.data();
+    let _b = b.data();
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = 0.0;
+            for l in 0..k {
+                sum += _a[i * k + l] * _b[j * k + l];
+            }
+            _c[i * n + j] = beta * _c[i * n + j] + alpha * sum;
+        }
+    }
+    // todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
 }
 
 // Dot product of two tensors (treated as vectors)
